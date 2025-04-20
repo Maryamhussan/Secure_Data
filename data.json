@@ -1,0 +1,19 @@
+{
+    "users": {
+        "maryam": {
+            "salt": "t1Xgd79hPD6Y3yDchNv25w==",
+            "password": "ma51NibhxyGQycgHRZiwaRCwgQJ0QFtBZf3uKHPQtc0="
+        },
+        "ghayyyas": {
+            "salt": "sMmLeHfDGSXysP5TGbN-xw==",
+            "password": "BJuFZp3DbLR4V2MH9HErhxI4d0rLY0UQfXl9SRf5z_s="
+        }
+    },
+    "encrypted_data": {
+        "maryam": [
+            "gAAAAABoBAVcuolUdW7ZnOVG0JjMwtinOHWoH1Wv8VgYuDYlfwMxTn9I94aUXzCb9M7r6e8TNTF58qGzd0HV1UXnhUEGpjRZPw==",
+            "gAAAAABoBAZuJ_WpoSKUyvT3BVmmIpWSN6UZ0j43l1PXG822b5_l0AbPOjiVcAtaL5IBKytrgVScFoJrOhCC93qJJXdH8lFJYw=="
+        ],
+        "ghayyyas": []
+    }
+}

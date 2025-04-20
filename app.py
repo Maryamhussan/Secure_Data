@@ -1,123 +1,191 @@
 import streamlit as st
-import hashlib
 import json
 import os
+import base64
+import hashlib
 from cryptography.fernet import Fernet
+from datetime import datetime, timedelta
 
-# Generate/load encryption key
-KEY_FILE = "secret.key"
-DATA_FILE = "stored_data.json"
+DATA_FILE = "secure_data.json"
+USER_FILE = "users.json"
 
-if os.path.exists(KEY_FILE):
-    with open(KEY_FILE, "rb") as f:
-        KEY = f.read()
-else:
-    KEY = Fernet.generate_key()
-    with open(KEY_FILE, "wb") as f:
-        f.write(KEY)
+# Load stored data from JSON file
+def load_data():
+    if os.path.exists(DATA_FILE):
+        with open(DATA_FILE, "r") as f:
+            return json.load(f)
+    return {}
 
-cipher = Fernet(KEY)
+# Save data to JSON file
+def save_data(data):
+    with open(DATA_FILE, "w") as f:
+        json.dump(data, f, indent=4)
 
-# Session state initialization
+# Load users
+def load_users():
+    if os.path.exists(USER_FILE):
+        with open(USER_FILE, "r") as f:
+            return json.load(f)
+    return {}
+
+# Save users
+def save_users(users):
+    with open(USER_FILE, "w") as f:
+        json.dump(users, f, indent=4)
+
+# PBKDF2 Hashing
+def hash_password(password, salt=None):
+    if salt is None:
+        salt = os.urandom(16)
+    hashed = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, 100000)
+    return base64.b64encode(salt + hashed).decode()
+
+def verify_password(password, hashed_value):
+    hashed_value_bytes = base64.b64decode(hashed_value.encode())
+    salt = hashed_value_bytes[:16]
+    stored_hash = hashed_value_bytes[16:]
+    new_hash = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, 100000)
+    return new_hash == stored_hash
+
+# Derive Fernet key from passkey
+def derive_key(passkey):
+    key = hashlib.pbkdf2_hmac("sha256", passkey.encode(), b'salt_key', 100000)
+    return base64.urlsafe_b64encode(key)
+
+# Initialize session state
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
+if "username" not in st.session_state:
+    st.session_state.username = None
 if "failed_attempts" not in st.session_state:
     st.session_state.failed_attempts = 0
+if "lockout_time" not in st.session_state:
+    st.session_state.lockout_time = None
 
-if "is_authorized" not in st.session_state:
-    st.session_state.is_authorized = True  # Start unlocked
+# Register
+def register():
+    st.subheader("📝 Register")
+    username = st.text_input("Choose a Username")
+    password = st.text_input("Choose a Password", type="password")
+    if st.button("Register"):
+        users = load_users()
+        if username in users:
+            st.error("Username already exists.")
+        else:
+            hashed = hash_password(password)
+            users[username] = {"password": hashed}
+            save_users(users)
+            st.success("✅ Registered successfully! Please login.")
 
-# Load or initialize JSON data
-if os.path.exists(DATA_FILE):
-    with open(DATA_FILE, "r") as f:
-        stored_data = json.load(f)
-else:
-    stored_data = {}
+# Login
+def login():
+    st.subheader("🔐 Login")
+    username = st.text_input("Username")
+    password = st.text_input("Password", type="password")
 
-# Helper functions
-def hash_passkey(passkey):
-    return hashlib.sha256(passkey.encode()).hexdigest()
+    users = load_users()
 
-def encrypt_data(text, passkey):
-    return cipher.encrypt(text.encode()).decode()
+    # Lockout check
+    if st.session_state.lockout_time:
+        if datetime.now() < st.session_state.lockout_time:
+            st.warning("⏳ Too many attempts! Try again later.")
+            return
+        else:
+            st.session_state.lockout_time = None
+            st.session_state.failed_attempts = 0
 
-def decrypt_data(encrypted_text, passkey):
-    hashed_passkey = hash_passkey(passkey)
-    entry = stored_data.get(encrypted_text)
+    if st.button("Login"):
+        if username in users and verify_password(password, users[username]["password"]):
+            st.session_state.logged_in = True
+            st.session_state.username = username
+            st.session_state.failed_attempts = 0
+            st.success("✅ Logged in successfully!")
+        else:
+            st.session_state.failed_attempts += 1
+            st.error(f"❌ Invalid credentials! Attempts left: {3 - st.session_state.failed_attempts}")
+            if st.session_state.failed_attempts >= 3:
+                st.session_state.lockout_time = datetime.now() + timedelta(seconds=30)
+                st.warning("🔒 Too many failed attempts. Locked for 30 seconds.")
 
-    if entry and entry["passkey"] == hashed_passkey:
-        st.session_state.failed_attempts = 0
-        return cipher.decrypt(encrypted_text.encode()).decode()
-    
-    st.session_state.failed_attempts += 1
-    return None
+# Store encrypted data
+def store_data():
+    st.subheader("📦 Store Encrypted Data")
+    text = st.text_area("Enter the text to encrypt:")
+    passkey = st.text_input("Enter a passkey for encryption", type="password")
 
-def save_data():
-    with open(DATA_FILE, "w") as f:
-        json.dump(stored_data, f, indent=4)
+    if st.button("Encrypt & Save"):
+        if text and passkey:
+            key = derive_key(passkey)
+            cipher = Fernet(key)
+            encrypted_text = cipher.encrypt(text.encode()).decode()
 
-# Streamlit UI
-st.title("🔐 Secure Data Encryption System")
+            data = load_data()
+            user_data = data.get(st.session_state.username, [])
+            user_data.append(encrypted_text)
+            data[st.session_state.username] = user_data
+            save_data(data)
+            st.success("✅ Data encrypted and saved!")
+        else:
+            st.error("⚠️ Both fields are required.")
 
-menu = ["Home", "Store Data", "View Stored Data", "Decrypt Data","Login"]
-choice = st.sidebar.selectbox("Navigation", menu)
+# View stored encrypted data
+def view_encrypted():
+    st.subheader("🗂️ View Stored Encrypted Data")
+    data = load_data()
+    user_data = data.get(st.session_state.username, [])
 
-# Forced reauthorization after 3 failed attempts
-if st.session_state.failed_attempts >= 3 and choice != "Login":
-    st.warning("🔒 Too many failed attempts. Reauthorization required!")
-    choice = "Login"
-
-if choice == "Home":
-    st.subheader("🏠 Welcome")
-    st.write("Store and retrieve your data securely using a passkey.")
-
-elif choice == "Store Data":
-    if st.session_state.is_authorized:
-        st.subheader("📂 Store Data Securely")
-        user_data = st.text_area("Enter Data:")
-        passkey = st.text_input("Enter Passkey:", type="password")
-
-        if st.button("Encrypt & Save"):
-            if user_data and passkey:
-                hashed = hash_passkey(passkey)
-                encrypted = encrypt_data(user_data, passkey)
-                stored_data[encrypted] = {"passkey": hashed}
-                save_data()
-                st.success("✅ Data stored successfully!")
-            else:
-                st.error("⚠️ Both fields are required!")
+    if not user_data:
+        st.info("No data stored.")
     else:
-        st.error("❌ You must be authorized to store data.")
+        for idx, entry in enumerate(user_data, 1):
+            st.code(entry, language="text")
 
-elif choice == "View Stored Data":
-    st.subheader("📄 Encrypted Data List")
-    if stored_data:
-        for encrypted_text in stored_data.keys():
-            st.code(encrypted_text)
-    else:
-        st.info("📭 No data stored yet.")
-
-elif choice == "Decrypt Data":
-    st.subheader("🔓 Decrypt Your Data")
+# Decrypt data
+def decrypt_data():
+    st.subheader("🔓 Decrypt Data")
     encrypted_text = st.text_area("Paste Encrypted Data:")
-    passkey = st.text_input("Enter Passkey:", type="password")
+    passkey = st.text_input("Enter Passkey", type="password")
 
     if st.button("Decrypt"):
         if encrypted_text and passkey:
-            result = decrypt_data(encrypted_text, passkey)
-            if result:
-                st.success(f"✅ Decrypted Data: {result}")
-            else:
-                st.error(f"❌ Incorrect passkey. Attempts left: {3 - st.session_state.failed_attempts}")
+            try:
+                key = derive_key(passkey)
+                cipher = Fernet(key)
+                decrypted = cipher.decrypt(encrypted_text.encode()).decode()
+                st.success(f"✅ Decrypted Text: {decrypted}")
+                st.session_state.failed_attempts = 0
+            except Exception as e:
+                st.session_state.failed_attempts += 1
+                attempts_left = 3 - st.session_state.failed_attempts
+                st.error(f"❌ Failed to decrypt. Attempts left: {attempts_left}")
+                if st.session_state.failed_attempts >= 3:
+                    st.warning("🔒 Too many failed attempts! Please login again.")
+                    st.session_state.logged_in = False
+                    st.session_state.failed_attempts = 0
         else:
-            st.error("⚠️ Both fields are required!")
+            st.error("⚠️ Please fill both fields.")
 
-elif choice == "Login":
-    st.subheader("🔐 Reauthorization Required")
-    master_pass = st.text_input("Enter Master Password:", type="password")
+# Main
+st.title("🔐 Secure Data App")
 
-    if st.button("Login"):
-        if master_pass == "admin123":  # Replace with secure auth
-            st.session_state.failed_attempts = 0
-            st.session_state.is_authorized = True
-            st.success("✅ Reauthorized!")
-        else:
-            st.error("❌ Incorrect master password.")
+if not st.session_state.logged_in:
+    menu = ["Login", "Register"]
+    choice = st.sidebar.selectbox("Menu", menu)
+    if choice == "Login":
+        login()
+    elif choice == "Register":
+        register()
+else:
+    menu = ["Store Data", "View Encrypted Data", "Decrypt Data", "Logout"]
+    choice = st.sidebar.selectbox("Menu", menu)
+
+    if choice == "Store Data":
+        store_data()
+    elif choice == "View Encrypted Data":
+        view_encrypted()
+    elif choice == "Decrypt Data":
+        decrypt_data()
+    elif choice == "Logout":
+        st.session_state.logged_in = False
+        st.session_state.username = None
+        st.success("👋 Logged out successfully.")
